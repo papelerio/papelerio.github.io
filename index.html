@@ -491,8 +491,14 @@
     <div class="modal-content">
       <h2 id="modal-title">Nueva Publicación</h2>
       <div class="form-group">
-        <label for="post-image">Imagen (URL)</label>
-        <input type="text" id="post-image" placeholder="Pega la URL de una imagen">
+        <label for="post-image">Imagen (URL o Base64)</label>
+        <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+          <input type="text" id="post-image" placeholder="Pega la URL o usa el botón de importar" style="flex: 1;">
+          <button type="button" id="import-image-btn" style="white-space: nowrap; padding: 8px 14px; font-size: 0.88rem; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);">
+            <i class="fas fa-file-import"></i> <span id="import-btn-text">Importar</span>
+          </button>
+        </div>
+        <input type="file" id="import-file-input" accept="image/*" style="display: none;">
       </div>
       <div class="form-group">
         <label for="post-title">Título</label>
@@ -603,6 +609,7 @@
   <div class="notification" id="notification">
     ¡Operación completada!
   </div>
+  <script src="image-compressor.js"></script>
   <script type="module">
     // Firebase imports and init
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
@@ -692,6 +699,7 @@
     function init() {
       initLocalSettings();
       loadLocalData();
+      setupImageImporter();
     }
 
     function initLocalSettings() {
@@ -1242,10 +1250,148 @@
       postModal.style.display = 'flex';
     }
 
+    // Configuración del botón inteligente de importación de imagen
+    let resetImportBtnFn = null;
+
+    function setupImageImporter() {
+      const importBtn = document.getElementById('import-image-btn');
+      const importBtnText = document.getElementById('import-btn-text');
+      const importFileInput = document.getElementById('import-file-input');
+      const postImageInput = document.getElementById('post-image');
+
+      if (!importBtn || !importFileInput || !postImageInput) return;
+
+      let isWaitingPaste = false;
+      let pasteTimeout = null;
+
+      function resetImportBtn() {
+        isWaitingPaste = false;
+        clearTimeout(pasteTimeout);
+        importBtn.style.backgroundColor = 'var(--primary)';
+        importBtn.style.color = 'white';
+        importBtn.style.border = 'none';
+        if (importBtnText) importBtnText.textContent = 'Importar';
+        const icon = importBtn.querySelector('i');
+        if (icon) icon.className = 'fas fa-file-import';
+      }
+
+      resetImportBtnFn = resetImportBtn;
+
+      function setWaitingPasteState() {
+        isWaitingPaste = true;
+        importBtn.style.backgroundColor = '#f1c40f'; // Amarillo
+        importBtn.style.color = '#1b3022';
+        importBtn.style.border = '2px solid #f39c12';
+        if (importBtnText) importBtnText.textContent = 'Pegar (Ctrl+V) [Clic 📂]';
+        const icon = importBtn.querySelector('i');
+        if (icon) icon.className = 'fas fa-paste';
+
+        // Auto reset después de 10 segundos
+        clearTimeout(pasteTimeout);
+        pasteTimeout = setTimeout(() => {
+          resetImportBtn();
+        }, 10000);
+      }
+
+      // Intersectar imagen con ImageCompressor
+      async function processWithCompressor(fileOrDataUrl) {
+        try {
+          resetImportBtn();
+          showNotification('Abriendo compresor de imagen...');
+
+          const result = await ImageCompressor.open(fileOrDataUrl, {
+            quality: 0.75,
+            scale: 0.8
+          });
+
+          if (result && result.base64) {
+            postImageInput.value = result.base64;
+            showNotification(`¡Imagen optimizada! (${result.formattedCompressedSize})`);
+          }
+        } catch (err) {
+          resetImportBtn();
+          if (err && err.message && !err.message.includes('cancelada')) {
+            alert(`Error de compresión: ${err.message}`);
+          }
+        }
+      }
+
+      // 1er Click: Botón amarillo esperando Ctrl+V. 2do Click: Búsqueda manual por el dispositivo.
+      importBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+
+        if (!isWaitingPaste) {
+          // PRIMER CLICK: Poner en amarillo y esperar Ctrl+V
+          setWaitingPasteState();
+
+          // Intentar lectura directa del portapapeles si la API Clipboard está soportada
+          if (navigator.clipboard && navigator.clipboard.read) {
+            try {
+              const clipboardItems = await navigator.clipboard.read();
+              for (const item of clipboardItems) {
+                const imageType = item.types.find(type => type.startsWith('image/'));
+                if (imageType) {
+                  const blob = await item.getType(imageType);
+                  processWithCompressor(blob);
+                  return;
+                }
+              }
+            } catch (clipErr) {
+              console.log('Esperando evento Ctrl+V manual');
+            }
+          }
+        } else {
+          // SEGUNDO CLICK: Búsqueda manual por el dispositivo
+          resetImportBtn();
+          importFileInput.click();
+        }
+      });
+
+      // Selección manual desde explorador de archivos
+      importFileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) {
+          processWithCompressor(e.target.files[0]);
+          importFileInput.value = '';
+        }
+      });
+
+      // Interceptar evento Paste (Ctrl+V) cuando se presiona en la ventana o modal
+      window.addEventListener('paste', (e) => {
+        const postModal = document.getElementById('post-modal');
+        const isModalVisible = postModal && getComputedStyle(postModal).display !== 'none';
+
+        if (!isModalVisible && !isWaitingPaste) return;
+
+        const clipboardData = e.clipboardData || e.originalEvent?.clipboardData;
+        if (!clipboardData) return;
+
+        // 1. Buscar archivos de imagen en los items del portapapeles
+        if (clipboardData.items) {
+          for (let i = 0; i < clipboardData.items.length; i++) {
+            const item = clipboardData.items[i];
+            if (item.type.indexOf('image') !== -1) {
+              e.preventDefault();
+              const blob = item.getAsFile();
+              processWithCompressor(blob);
+              return;
+            }
+          }
+        }
+
+        // 2. Si es texto Base64
+        const textData = clipboardData.getData('text');
+        if (textData && textData.trim().startsWith('data:image/')) {
+          e.preventDefault();
+          processWithCompressor(textData.trim());
+        }
+      });
+    }
+
     // Cerrar modal de publicación
     function closePostModal() {
       postModal.style.display = 'none';
       editingPostId = null;
+      if (resetImportBtnFn) resetImportBtnFn();
     }
 
     // Guardar publicación
