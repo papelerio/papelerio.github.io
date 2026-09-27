@@ -491,12 +491,16 @@
     <div class="modal-content">
       <h2 id="modal-title">Nueva Publicación</h2>
       <div class="form-group">
-        <label for="post-image">Imagen (URL o Base64)</label>
-        <div style="display: flex; gap: 8px; margin-bottom: 6px;">
-          <input type="text" id="post-image" placeholder="Pega la URL o usa el botón de importar" style="flex: 1;">
-          <button type="button" id="import-image-btn" style="white-space: nowrap; padding: 8px 14px; font-size: 0.88rem; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);">
-            <i class="fas fa-file-import"></i> <span id="import-btn-text">Importar</span>
+        <label>Imagen de la Publicación</label>
+        <input type="hidden" id="post-image">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <button type="button" id="import-image-btn" style="flex: 1; justify-content: center; padding: 12px 18px; font-size: 0.95rem; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);">
+            <i class="fas fa-file-import"></i> <span id="import-btn-text">Importar Imagen</span>
           </button>
+        </div>
+        <div id="image-preview-container" style="display: none; margin-top: 12px; text-align: center; position: relative; background: var(--primary-light); padding: 8px; border-radius: 12px;">
+          <img id="post-image-thumb" src="" alt="Vista previa" style="max-height: 150px; max-width: 100%; border-radius: 8px; object-fit: contain;">
+          <button type="button" id="remove-image-btn" style="position: absolute; top: -8px; right: -8px; background: var(--danger); color: white; border: none; width: 26px; height: 26px; border-radius: 50%; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.2);" title="Quitar imagen">&times;</button>
         </div>
         <input type="file" id="import-file-input" accept="image/*" style="display: none;">
       </div>
@@ -1221,10 +1225,23 @@
 
       editingPostId = post ? post.id : null;
       document.getElementById('modal-title').textContent = post ? 'Editar Publicación' : 'Nueva Publicación';
-      document.getElementById('post-image').value = post ? post.image : '';
+      document.getElementById('post-image').value = post ? post.image || '' : '';
       document.getElementById('post-title').value = post ? post.title : '';
       document.getElementById('post-description').value = post ? post.description : '';
       document.getElementById('post-link').value = post ? post.link || '' : '';
+
+      // Mostrar vista previa de miniatura si existe
+      const previewContainer = document.getElementById('image-preview-container');
+      const previewThumb = document.getElementById('post-image-thumb');
+      if (previewContainer && previewThumb) {
+        if (post && post.image) {
+          previewThumb.src = post.image;
+          previewContainer.style.display = 'block';
+        } else {
+          previewThumb.src = '';
+          previewContainer.style.display = 'none';
+        }
+      }
 
       // Actualizar categorías disponibles
       updateCategoriesUI();
@@ -1258,6 +1275,9 @@
       const importBtnText = document.getElementById('import-btn-text');
       const importFileInput = document.getElementById('import-file-input');
       const postImageInput = document.getElementById('post-image');
+      const removeImageBtn = document.getElementById('remove-image-btn');
+      const previewContainer = document.getElementById('image-preview-container');
+      const previewThumb = document.getElementById('post-image-thumb');
 
       if (!importBtn || !importFileInput || !postImageInput) return;
 
@@ -1270,7 +1290,7 @@
         importBtn.style.backgroundColor = 'var(--primary)';
         importBtn.style.color = 'white';
         importBtn.style.border = 'none';
-        if (importBtnText) importBtnText.textContent = 'Importar';
+        if (importBtnText) importBtnText.textContent = 'Importar Imagen';
         const icon = importBtn.querySelector('i');
         if (icon) icon.className = 'fas fa-file-import';
       }
@@ -1306,6 +1326,10 @@
 
           if (result && result.base64) {
             postImageInput.value = result.base64;
+            if (previewContainer && previewThumb) {
+              previewThumb.src = result.base64;
+              previewContainer.style.display = 'block';
+            }
             showNotification(`¡Imagen optimizada! (${result.formattedCompressedSize})`);
           }
         } catch (err) {
@@ -1316,30 +1340,25 @@
         }
       }
 
+      // Botón para quitar la imagen seleccionada
+      if (removeImageBtn) {
+        removeImageBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          postImageInput.value = '';
+          if (previewContainer) previewContainer.style.display = 'none';
+          if (previewThumb) previewThumb.src = '';
+          showNotification('Imagen quitada');
+        });
+      }
+
       // 1er Click: Botón amarillo esperando Ctrl+V. 2do Click: Búsqueda manual por el dispositivo.
-      importBtn.addEventListener('click', async (e) => {
+      importBtn.addEventListener('click', (e) => {
         e.preventDefault();
 
         if (!isWaitingPaste) {
-          // PRIMER CLICK: Poner en amarillo y esperar Ctrl+V
+          // PRIMER CLICK: Poner en amarillo y enfocar para recibir pegado manual (Ctrl+V)
           setWaitingPasteState();
-
-          // Intentar lectura directa del portapapeles si la API Clipboard está soportada
-          if (navigator.clipboard && navigator.clipboard.read) {
-            try {
-              const clipboardItems = await navigator.clipboard.read();
-              for (const item of clipboardItems) {
-                const imageType = item.types.find(type => type.startsWith('image/'));
-                if (imageType) {
-                  const blob = await item.getType(imageType);
-                  processWithCompressor(blob);
-                  return;
-                }
-              }
-            } catch (clipErr) {
-              console.log('Esperando evento Ctrl+V manual');
-            }
-          }
+          postImageInput.focus();
         } else {
           // SEGUNDO CLICK: Búsqueda manual por el dispositivo
           resetImportBtn();
